@@ -36,8 +36,6 @@ WebApp.clientPrograms = {};
 // XXX maps archs to program path on filesystem
 var archPath = {};
 
-var bundledJsCssUrlRewriteHook;
-
 var sha1 = function (contents) {
   var hash = crypto.createHash('sha1');
   hash.update(contents);
@@ -240,18 +238,18 @@ var boilerplateByArch = {};
 //
 // If a previous connect middleware has rendered content for the head or body,
 // returns the boilerplate with that content patched in otherwise
-// memoizes on HTML attributes (used by, eg, appcache) and whether inline 
+// memoizes on HTML attributes (used by, eg, appcache) and whether inline
 // scripts are currently allowed.
 // XXX so far this function is always called with arch === 'web.browser'
 var memoizedBoilerplate = {};
 var getBoilerplate = function (request, arch) {
   var useMemoized = ! (request.dynamicHead || request.dynamicBody);
   var htmlAttributes = getHtmlAttributes(request);
-  
+
   if (useMemoized) {
-    // The only thing that changes from request to request (unless extra 
-    // content is added to the head or body) are the HTML attributes 
-    // (used by, eg, appcache) and whether inline scripts are allowed, so we 
+    // The only thing that changes from request to request (unless extra
+    // content is added to the head or body) are the HTML attributes
+    // (used by, eg, appcache) and whether inline scripts are allowed, so we
     // can memoize based on that.
     var memHash = JSON.stringify({
       inlineScriptsAllowed: inlineScriptsAllowed,
@@ -266,30 +264,24 @@ var getBoilerplate = function (request, arch) {
     }
     return memoizedBoilerplate[memHash];
   }
-  
-  var boilerplateOptions = _.extend({ 
-    htmlAttributes: htmlAttributes 
+
+  var boilerplateOptions = _.extend({
+    htmlAttributes: htmlAttributes
   }, _.pick(request, 'dynamicHead', 'dynamicBody'));
-  
+
   return boilerplateByArch[arch].toHTML(boilerplateOptions);
 };
 
 WebAppInternals.generateBoilerplateInstance = function (arch,
                                                         manifest,
                                                         additionalOptions) {
+  var self = this;
   additionalOptions = additionalOptions || {};
 
   var runtimeConfig = _.extend(
     _.clone(__meteor_runtime_config__),
     additionalOptions.runtimeConfigOverrides || {}
   );
-
-  var jsCssUrlRewriteHook = bundledJsCssUrlRewriteHook || function (url) {
-    var bundledPrefix =
-       __meteor_runtime_config__.ROOT_URL_PATH_PREFIX || '';
-    return bundledPrefix + url;
-  };
-
   return new Boilerplate(arch, manifest,
     _.extend({
       pathMapper: function (itemPath) {
@@ -313,7 +305,7 @@ WebAppInternals.generateBoilerplateInstance = function (arch,
         meteorRuntimeConfig: JSON.stringify(
           encodeURIComponent(JSON.stringify(runtimeConfig))),
         rootUrlPathPrefix: __meteor_runtime_config__.ROOT_URL_PATH_PREFIX || '',
-        bundledJsCssUrlRewriteHook: jsCssUrlRewriteHook,
+        bundledJsCssUrlRewriteHook: self.bundledJsCssUrlRewriteHook,
         inlineScriptsAllowed: WebAppInternals.inlineScriptsAllowed(),
         inline: additionalOptions.inline
       }
@@ -536,6 +528,8 @@ var runWebAppServer = function () {
   };
 
   WebAppInternals.generateBoilerplate = function () {
+    var self = this;
+
     // This boilerplate will be served to the mobile devices when used with
     // Meteor/Cordova for the Hot-Code Push and since the file will be served by
     // the device's server, it is important to set the DDP url to the actual
@@ -574,9 +568,13 @@ var runWebAppServer = function () {
 
       // Configure CSS injection for the default arch
       // XXX implement the CSS injection for all archs?
-      WebAppInternals.refreshableAssets = {
-        allCss: boilerplateByArch[WebApp.defaultArch].baseData.css
-      };
+      var cssFiles = boilerplateByArch[WebApp.defaultArch].baseData.css;
+      // Rewrite all CSS files (which are written directly to <style> tags)
+      // by autoupdate_client to use the CDN prefix/etc
+      var allCss = _.map(cssFiles, function(cssFile) {
+        return { url: self.bundledJsCssUrlRewriteHook(cssFile.url) };
+      });
+      WebAppInternals.refreshableAssets = { allCss: allCss };
     });
   };
 
@@ -818,9 +816,16 @@ WebAppInternals.setInlineScriptsAllowed = function (value) {
   WebAppInternals.generateBoilerplate();
 };
 
+// this is the default implementation, can be overridden below
+WebAppInternals.bundledJsCssUrlRewriteHook = function (url) {
+  var bundledPrefix =
+     __meteor_runtime_config__.ROOT_URL_PATH_PREFIX || '';
+  return bundledPrefix + url;
+};
 
 WebAppInternals.setBundledJsCssUrlRewriteHook = function (hookFn) {
-  bundledJsCssUrlRewriteHook = hookFn;
+  var self = this;
+  self.bundledJsCssUrlRewriteHook = hookFn;
   WebAppInternals.generateBoilerplate();
 };
 
